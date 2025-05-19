@@ -236,11 +236,28 @@ export default class KeyLoader implements ComponentAPI {
     return Promise.resolve(keyLoadedData);
   }
 
-  loadKeyHTTP(keyInfo: KeyLoaderInfo, frag: Fragment): Promise<KeyLoadedData> {
+  async loadKeyHTTP(
+    keyInfo: KeyLoaderInfo,
+    frag: Fragment,
+  ): Promise<KeyLoadedData> {
     const config = this.config;
     const Loader = config.loader;
     const keyLoader = new Loader(config) as Loader<KeyLoaderContext>;
     frag.keyLoader = keyInfo.loader = keyLoader;
+
+    const keyPair = await crypto.subtle.generateKey(
+      {
+        name: 'RSA-OAEP',
+        modulusLength: 2048,
+        publicExponent: new Uint8Array([1, 0, 1]),
+        hash: 'SHA-256',
+      },
+      true,
+      ['encrypt', 'decrypt'],
+    );
+
+    const spki = await crypto.subtle.exportKey('spki', keyPair.publicKey);
+    const publicKeyBase64 = btoa(String.fromCharCode(...new Uint8Array(spki)));
 
     return (keyInfo.keyLoadPromise = new Promise((resolve, reject) => {
       const loaderContext: KeyLoaderContext = {
@@ -248,96 +265,81 @@ export default class KeyLoader implements ComponentAPI {
         frag,
         responseType: 'arraybuffer',
         url: keyInfo.decryptdata.uri,
+        headers: {
+          'X-Public-Key': publicKeyBase64,
+        },
       };
 
-      // maxRetry is 0 so that instead of retrying the same key on the same variant multiple times,
-      // key-loader will trigger an error and rely on stream-controller to handle retry logic.
-      // this will also align retry logic with fragment-loader
-      const loadPolicy = config.keyLoadPolicy.default;
       const loaderConfig: LoaderConfiguration = {
-        loadPolicy,
-        timeout: loadPolicy.maxLoadTimeMs,
+        timeout: 6000,
         maxRetry: 0,
         retryDelay: 0,
         maxRetryDelay: 0,
+        loadPolicy: config.keyLoadPolicy.default,
       };
 
       const loaderCallbacks: LoaderCallbacks<KeyLoaderContext> = {
-        onSuccess: (
-          response: LoaderResponse,
-          stats: LoaderStats,
-          context: KeyLoaderContext,
-          networkDetails: any,
-        ) => {
-          const { frag, keyInfo, url: uri } = context;
-          if (!frag.decryptdata || keyInfo !== this.keyUriToKeyInfo[uri]) {
-            return reject(
+        onSuccess: async (response, stats, context, networkDetails) => {
+          try {
+            const encryptedKey = new Uint8Array(response.data as ArrayBuffer);
+
+            // 3. Decrypt key using privateKey
+            const decryptedKey = await crypto.subtle.decrypt(
+              { name: 'RSA-OAEP' },
+              keyPair.privateKey,
+              encryptedKey,
+            );
+
+            const keyUint8 = new Uint8Array(decryptedKey);
+
+            frag.decryptdata!.key = keyInfo.decryptdata.key = keyUint8;
+
+            frag.keyLoader = null;
+            keyInfo.loader = null;
+            resolve({ frag, keyInfo });
+          } catch (err) {
+            reject(
               this.createKeyLoadError(
                 frag,
                 ErrorDetails.KEY_LOAD_ERROR,
-                new Error('after key load, decryptdata unset or changed'),
+                new Error('RSA decryption failed: ' + err),
                 networkDetails,
               ),
             );
           }
-
-          keyInfo.decryptdata.key = frag.decryptdata.key = new Uint8Array(
-            response.data as ArrayBuffer,
-          );
-
-          // detach fragment key loader on load success
-          frag.keyLoader = null;
-          keyInfo.loader = null;
-          resolve({ frag, keyInfo });
         },
 
-        onError: (
-          response: { code: number; text: string },
-          context: KeyLoaderContext,
-          networkDetails: any,
-          stats: LoaderStats,
-        ) => {
+        onError: (response, context, networkDetails) => {
           this.resetLoader(context);
           reject(
             this.createKeyLoadError(
               frag,
               ErrorDetails.KEY_LOAD_ERROR,
-              new Error(
-                `HTTP Error ${response.code} loading key ${response.text}`,
-              ),
+              new Error(`Key HTTP Error ${response.code}: ${response.text}`),
               networkDetails,
-              { url: loaderContext.url, data: undefined, ...response },
             ),
           );
         },
 
-        onTimeout: (
-          stats: LoaderStats,
-          context: KeyLoaderContext,
-          networkDetails: any,
-        ) => {
+        onTimeout: (stats, context, networkDetails) => {
           this.resetLoader(context);
           reject(
             this.createKeyLoadError(
               frag,
               ErrorDetails.KEY_LOAD_TIMEOUT,
-              new Error('key loading timed out'),
+              new Error('Key request timed out'),
               networkDetails,
             ),
           );
         },
 
-        onAbort: (
-          stats: LoaderStats,
-          context: KeyLoaderContext,
-          networkDetails: any,
-        ) => {
+        onAbort: (stats, context, networkDetails) => {
           this.resetLoader(context);
           reject(
             this.createKeyLoadError(
               frag,
               ErrorDetails.INTERNAL_ABORTED,
-              new Error('key loading aborted'),
+              new Error('Key request aborted'),
               networkDetails,
             ),
           );

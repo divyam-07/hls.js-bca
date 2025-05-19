@@ -1,16 +1,10 @@
 {
-  "name": "hls.js",
+  "name": "hls.js.bca",
+  "version": "1.0.2",
   "license": "Apache-2.0",
-  "description": "JavaScript HLS client using MediaSourceExtension",
+  "description": "JavaScript HLS client using MediaSourceExtension with rsa automatic in key-loader.ts",
   "homepage": "https://github.com/video-dev/hls.js",
-  "authors": "Guillaume du Pontavice <g.du.pontavice@gmail.com>",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/video-dev/hls.js"
-  },
-  "bugs": {
-    "url": "https://github.com/video-dev/hls.js/issues"
-  },
+  "authors": "Guillaume du Pontavice -> Divyam <g.du.pontavice@gmail.com>",
   "main": "./dist/hls.js",
   "module": "./dist/hls.mjs",
   "types": "./dist/hls.d.ts",
@@ -134,5 +128,8 @@
     "typescript": "5.8.3",
     "url-toolkit": "2.2.5",
     "wrangler": "3.114.8"
+  },
+  "dependencies": {
+    "ci": "^2.3.0"
   }
 }
